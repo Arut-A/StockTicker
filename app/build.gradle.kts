@@ -55,7 +55,7 @@ android {
     //   }
     //   stdout.toString().trim()
     // }
-    "3.9.840-moex"  // Hardcoded version for CI builds
+    "3.9.840"  // Hardcoded version for CI builds
   }
 
 
