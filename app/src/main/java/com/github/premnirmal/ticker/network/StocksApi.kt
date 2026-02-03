@@ -24,7 +24,7 @@ class StocksApi @Inject constructor(
 ) {
 
     val csrfTokenMatchPattern by lazy {
-        Regex("csrfToken\\" value=\\"(.+)\\">")
+        Regex("""\"csrfToken\":\"(.+)\"""")
     }
 
     private suspend fun loadCrumb() {
