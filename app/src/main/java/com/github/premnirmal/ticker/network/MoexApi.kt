@@ -32,39 +32,75 @@ class MoexApi {
             val mdData = marketdataObj.getJSONArray("data")
             
             if (mdData.length() == 0) return null
-            val mdRow = mdData.getJSONArray(0)
             
-            // Parse securities
+            // MOEX returns multiple boards - find TQBR (main board)
+            var mdRow: org.json.JSONArray? = null
+            val boardIdIndex = findColumnIndex(mdColumns, "BOARDID")
+            
+            for (i in 0 until mdData.length()) {
+                val row = mdData.getJSONArray(i)
+                val boardId = if (boardIdIndex >= 0) row.optString(boardIdIndex, "") else ""
+                if (boardId == "TQBR") {
+                    mdRow = row
+                    break
+                }
+            }
+            
+            if (mdRow == null) mdRow = mdData.getJSONArray(0)
+            
+            // Parse securities for the name and previous price
             val securitiesObj = json.getJSONObject("securities")
             val secColumns = securitiesObj.getJSONArray("columns")
             val secData = securitiesObj.getJSONArray("data")
             
             if (secData.length() == 0) return null
-            val secRow = secData.getJSONArray(0)
             
-            // Find column indices
+            // Find matching SECID row
+            var secRow: org.json.JSONArray? = null
+            val secIdIndex = findColumnIndex(secColumns, "SECID")
+            
+            for (i in 0 until secData.length()) {
+                val row = secData.getJSONArray(i)
+                val secId = if (secIdIndex >= 0) row.optString(secIdIndex, "") else ""
+                if (secId.equals(ticker, ignoreCase = true)) {
+                    secRow = row
+                    break
+                }
+            }
+            
+            if (secRow == null) secRow = secData.getJSONArray(0)
+            
+            // Find column indices in marketdata
             val lastIndex = findColumnIndex(mdColumns, "LAST")
             val openIndex = findColumnIndex(mdColumns, "OPEN")
             val highIndex = findColumnIndex(mdColumns, "HIGH")
             val lowIndex = findColumnIndex(mdColumns, "LOW")
-            val nameIndex = findColumnIndex(secColumns, "SHORTNAME")
+            val changePctIndex = findColumnIndex(mdColumns, "LASTTOPREVPRICE")
             
-            // Extract values
+            // Find column indices in securities (PREVPRICE is here!)
+            val nameIndex = findColumnIndex(secColumns, "SHORTNAME")
+            val prevPriceIndex = findColumnIndex(secColumns, "PREVPRICE")
+            
+            // Extract values from marketdata
             val last = mdRow.optDouble(lastIndex, 0.0)
             val open = mdRow.optDouble(openIndex, last)
             val high = mdRow.optDouble(highIndex, last)
             val low = mdRow.optDouble(lowIndex, last)
+            val changePct = mdRow.optDouble(changePctIndex, 0.0)
+            
+            // Extract values from securities
+            val prevPrice = secRow.optDouble(prevPriceIndex, open)
             val name = secRow.optString(nameIndex, ticker)
             
-            val change = last - open
-            val changePercent = if (open > 0) (change / open) * 100 else 0.0
+            // Calculate absolute change
+            val change = last - prevPrice
             
-            // Create Quote using the exact constructor from YahooQuoteNet.toQuote()
+            // Create Quote
             val quote = Quote(
                 symbol = "$ticker.ME",
                 name = name,
                 lastTradePrice = last.toFloat(),
-                changeInPercent = changePercent.toFloat(),
+                changeInPercent = changePct.toFloat(),
                 change = change.toFloat()
             ).apply {
                 stockExchange = "MOEX"
@@ -72,6 +108,7 @@ class MoexApi {
                 dayHigh = high.toFloat()
                 dayLow = low.toFloat()
                 this.open = open.toFloat()
+                previousClose = prevPrice.toFloat()
             }
             
             return quote
