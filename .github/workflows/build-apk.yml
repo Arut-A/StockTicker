@@ -14,6 +14,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full git history for version info
       
     - name: Set up JDK 17
       uses: actions/setup-java@v4
@@ -25,8 +27,11 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
       
+    - name: Clean project
+      run: ./gradlew clean
+      
     - name: Build Debug APK
-      run: ./gradlew assembleDebug --stacktrace
+      run: ./gradlew assembleDebug --stacktrace --no-daemon
       
     - name: Upload APK
       uses: actions/upload-artifact@v4
@@ -39,7 +44,7 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         tag_name: build-${{ github.run_number }}
-        name: Build ${{ github.run_number }}
+        name: MOEX APK Build ${{ github.run_number }}
         files: app/build/outputs/apk/debug/app-debug.apk
         draft: false
         prerelease: false
