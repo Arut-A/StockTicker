@@ -71,7 +71,7 @@ class MoexApi {
                 currencyCode = "RUB"
                 dayHigh = high.toFloat()
                 dayLow = low.toFloat()
-                open = open.toFloat()
+                this.open = open.toFloat()
             }
             
             return quote
