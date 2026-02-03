@@ -46,15 +46,18 @@ repositories {
 
 android {
   val getVersionName = { ->
-    ByteArrayOutputStream().use { outputStream ->
-      val stdout = outputStream
-      exec {
-        commandLine("git", "describe", "--tags", "--abbrev=0")
-        standardOutput = stdout
-      }
-      stdout.toString().trim()
-    }
+    // DISABLED FOR GITHUB ACTIONS - Git describe fails in CI
+    // ByteArrayOutputStream().use { outputStream ->
+    //   val stdout = outputStream
+    //   exec {
+    //     commandLine("git", "describe", "--tags", "--abbrev=0")
+    //     standardOutput = stdout
+    //   }
+    //   stdout.toString().trim()
+    // }
+    "3.9.840-moex"  // Hardcoded version for CI builds
   }
+
 
   val getOldGitVersion = { ->
     try {
