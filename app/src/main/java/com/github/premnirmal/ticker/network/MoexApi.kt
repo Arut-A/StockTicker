@@ -1,9 +1,5 @@
 package com.github.premnirmal.ticker.network
 
-import com.github.premnirmal.ticker.network.data.MoexMarketData
-import com.github.premnirmal.ticker.network.data.MoexQuote
-import com.github.premnirmal.ticker.network.data.MoexResponse
-import com.github.premnirmal.ticker.network.data.MoexSecurities
 import com.github.premnirmal.ticker.network.data.Quote
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -63,19 +59,22 @@ class MoexApi {
             val change = last - open
             val changePercent = if (open > 0) (change / open) * 100 else 0.0
             
-            // Create Quote object compatible with existing app structure
-            return Quote(
-                symbol = "$ticker.ME",  // Add .ME suffix for identification
+            // Create Quote using the exact constructor from YahooQuoteNet.toQuote()
+            val quote = Quote(
+                symbol = "$ticker.ME",
                 name = name,
                 lastTradePrice = last.toFloat(),
                 changeInPercent = changePercent.toFloat(),
-                change = change.toFloat(),
-                stockExchange = "MOEX",
-                currency = "RUB",
-                open = open.toFloat(),
-                high = high.toFloat(),
-                low = low.toFloat()
-            )
+                change = change.toFloat()
+            ).apply {
+                stockExchange = "MOEX"
+                currencyCode = "RUB"
+                dayHigh = high.toFloat()
+                dayLow = low.toFloat()
+                open = open.toFloat()
+            }
+            
+            return quote
         } catch (e: Exception) {
             e.printStackTrace()
             return null
@@ -94,7 +93,8 @@ class MoexApi {
     companion object {
         val MOEX_TICKERS = setOf(
             "OZON", "SBER", "GAZP", "LKOH", "YNDX", "ROSN", 
-            "NVTK", "GMKN", "TATN", "MGNT", "AFLT", "MTSS"
+            "NVTK", "GMKN", "TATN", "MGNT", "AFLT", "MTSS",
+            "VKCO", "POLY", "SNGS", "PLZL", "FEES", "ALRS"
         )
         
         fun isMoexTicker(ticker: String): Boolean {
