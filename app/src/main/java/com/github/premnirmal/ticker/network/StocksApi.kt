@@ -86,9 +86,41 @@ class StocksApi @Inject constructor(
     suspend fun getStocks(tickerList: List<String>): FetchResult<List<Quote>> =
         withContext(Dispatchers.IO) {
             try {
-                val quoteNets = getStocksYahoo(tickerList)
-                    ?: return@withContext FetchResult.failure(FetchException("Failed to fetch"))
-                return@withContext FetchResult.success(quoteNets.toQuoteMap().toOrderedList(tickerList))
+                // Split tickers into MOEX and Yahoo
+                val (moexTickers, yahooTickers) = tickerList.partition { MoexApi.isMoexTicker(it) }
+                
+                val quotes = mutableListOf<Quote>()
+                
+                // Fetch MOEX stocks
+                if (moexTickers.isNotEmpty()) {
+                    val moexApi = MoexApi()
+                    moexTickers.forEach { ticker ->
+                        try {
+                            val quote = moexApi.fetchQuote(ticker)
+                            if (quote != null) {
+                                quotes.add(quote)
+                            }
+                        } catch (e: Exception) {
+                            Timber.e(e, "Failed to fetch MOEX ticker: $ticker")
+                        }
+                    }
+                }
+                
+                // Fetch Yahoo stocks
+                if (yahooTickers.isNotEmpty()) {
+                    val quoteNets = getStocksYahoo(yahooTickers)
+                    if (quoteNets != null) {
+                        quotes.addAll(quoteNets.toQuoteMap().toOrderedList(yahooTickers))
+                    }
+                }
+                
+                // Return in original order
+                val orderedQuotes = tickerList.mapNotNull { ticker ->
+                    quotes.find { it.symbol.equals(ticker, ignoreCase = true) || 
+                                  it.symbol.equals("$ticker.ME", ignoreCase = true) }
+                }
+                
+                return@withContext FetchResult.success(orderedQuotes)
             } catch (ex: Exception) {
                 Timber.e(ex)
                 return@withContext FetchResult.failure(FetchException("Failed to fetch", ex))
@@ -98,6 +130,18 @@ class StocksApi @Inject constructor(
     suspend fun getStock(ticker: String): FetchResult<Quote> =
         withContext(Dispatchers.IO) {
             try {
+                // Check if it's a MOEX ticker first
+                if (MoexApi.isMoexTicker(ticker)) {
+                    val moexApi = MoexApi()
+                    val quote = moexApi.fetchQuote(ticker)
+                    if (quote != null) {
+                        return@withContext FetchResult.success(quote)
+                    }
+                    // If MOEX fetch fails, fall through to Yahoo
+                    Timber.w("MOEX fetch failed for $ticker, trying Yahoo Finance")
+                }
+                
+                // Fetch from Yahoo Finance
                 val quoteNets = getStocksYahoo(listOf(ticker))
                     ?: return@withContext FetchResult.failure(FetchException("Failed to fetch $ticker"))
                 return@withContext FetchResult.success(quoteNets.first().toQuote())
@@ -127,69 +171,4 @@ class StocksApi @Inject constructor(
                     }
                 }
             } catch (ex: Exception) {
-                Timber.e(ex)
-                throw ex
-            }
-            val quoteNets = quotesResponse.body()?.quoteResponse?.result
-            quoteNets
-        }
-
-    private fun List<YahooQuoteNet>.toQuoteMap(): MutableMap<String, Quote> {
-        val quotesMap = HashMap<String, Quote>()
-        for (quoteNet in this) {
-            val quote = quoteNet.toQuote()
-            quotesMap[quote.symbol] = quote
-        }
-        return quotesMap
-    }
-
-    private fun MutableMap<String, Quote>.toOrderedList(tickerList: List<String>): List<Quote> {
-        val quotes = ArrayList<Quote>()
-        tickerList.filter { this.containsKey(it) }
-            .mapTo(quotes) { this[it]!! }
-        return quotes
-    }
-
-    private fun YahooQuoteNet.toQuote(): Quote {
-        val quote = Quote(
-            symbol = this.symbol,
-            name = (this.name ?: this.longName).orEmpty(),
-            lastTradePrice = this.lastTradePrice ?: 0f,
-            changeInPercent = this.changePercent ?: 0f,
-            change = this.change ?: 0f
-        )
-        quote.stockExchange = this.exchange ?: ""
-        quote.currencyCode = this.currency ?: "USD"
-        quote.annualDividendRate = this.annualDividendRate ?: 0f
-        quote.annualDividendYield = this.annualDividendYield ?: 0f
-        quote.region = this.region
-        quote.quoteType = this.quoteType
-        quote.longName = this.longName
-        quote.gmtOffSetMilliseconds = this.gmtOffSetMilliseconds ?: 0L
-        quote.dayHigh = this.regularMarketDayHigh
-        quote.dayLow = this.regularMarketDayLow
-        quote.previousClose = this.regularMarketPreviousClose ?: 0f
-        quote.open = this.regularMarketOpen
-        quote.regularMarketVolume = this.regularMarketVolume
-        quote.trailingPE = this.trailingPE
-        quote.marketState = this.marketState ?: ""
-        quote.tradeable = this.tradeable ?: false
-        quote.triggerable = this.triggerable ?: false
-        quote.fiftyTwoWeekLowChange = this.fiftyTwoWeekLowChange
-        quote.fiftyTwoWeekLowChangePercent = this.fiftyTwoWeekLowChangePercent
-        quote.fiftyTwoWeekHighChange = this.fiftyTwoWeekHighChange
-        quote.fiftyTwoWeekHighChangePercent = this.fiftyTwoWeekHighChangePercent
-        quote.fiftyTwoWeekLow = this.fiftyTwoWeekLow
-        quote.fiftyTwoWeekHigh = this.fiftyTwoWeekHigh
-        quote.dividendDate = this.dividendDate?.times(1000)
-        quote.earningsTimestamp = this.earningsTimestamp?.times(1000)
-        quote.fiftyDayAverage = this.fiftyDayAverage
-        quote.fiftyDayAverageChange = this.fiftyDayAverageChange
-        quote.fiftyDayAverageChangePercent = this.fiftyDayAverageChangePercent
-        quote.twoHundredDayAverage = this.twoHundredDayAverage
-        quote.twoHundredDayAverageChange = this.twoHundredDayAverageChange
-        quote.twoHundredDayAverageChangePercent = this.twoHundredDayAverageChangePercent
-        quote.marketCap = this.marketCap
-        return quote
-    }
-}
+                Timber.e
