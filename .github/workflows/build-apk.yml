@@ -30,8 +30,9 @@ jobs:
     - name: Clean project
       run: ./gradlew clean
       
-    - name: Build Debug APK
-      run: ./gradlew assembleDebug --stacktrace --no-daemon
+    - name: Build Dev Debug APK
+      run: ./gradlew assembleDevDebug --stacktrace --no-daemon
+
       
     - name: Upload APK
       uses: actions/upload-artifact@v4
