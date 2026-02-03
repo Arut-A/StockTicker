@@ -27,7 +27,7 @@ class StocksApi @Inject constructor(
 ) {
 
     val csrfTokenMatchPattern by lazy {
-        Regex("csrfToken\" value=\"(.+)\">")
+        Regex("csrfToken\\" value=\\"(.+)\\">")
     }
 
     private suspend fun loadCrumb() {
@@ -86,9 +86,41 @@ class StocksApi @Inject constructor(
     suspend fun getStocks(tickerList: List<String>): FetchResult<List<Quote>> =
         withContext(Dispatchers.IO) {
             try {
-                val quoteNets = getStocksYahoo(tickerList)
-                    ?: return@withContext FetchResult.failure(FetchException("Failed to fetch"))
-                return@withContext FetchResult.success(quoteNets.toQuoteMap().toOrderedList(tickerList))
+                val quotes = mutableListOf<Quote>()
+                val moexApi = MoexApi()
+                
+                // Separate MOEX and Yahoo tickers
+                val moexTickers = tickerList.filter { MoexApi.isMoexTicker(it) }
+                val yahooTickers = tickerList.filter { !MoexApi.isMoexTicker(it) }
+                
+                // Fetch MOEX tickers
+                for (ticker in moexTickers) {
+                    val quote = moexApi.fetchQuote(ticker)
+                    if (quote != null) {
+                        quotes.add(quote)
+                        Timber.d("MOEX: Fetched $ticker at ${quote.lastTradePrice} RUB")
+                    } else {
+                        Timber.e("MOEX: Failed to fetch $ticker")
+                    }
+                }
+                
+                // Fetch Yahoo tickers
+                if (yahooTickers.isNotEmpty()) {
+                    val quoteNets = getStocksYahoo(yahooTickers)
+                    if (quoteNets != null) {
+                        quotes.addAll(quoteNets.toQuoteMap().toOrderedList(yahooTickers))
+                    }
+                }
+                
+                // Return in original order
+                val orderedQuotes = tickerList.mapNotNull { ticker ->
+                    quotes.find { 
+                        it.symbol.equals(ticker, ignoreCase = true) || 
+                        it.symbol.equals(ticker.replace(".ME", "").replace(".MOEX", ""), ignoreCase = true) 
+                    }
+                }
+                
+                return@withContext FetchResult.success(orderedQuotes)
             } catch (ex: Exception) {
                 Timber.e(ex)
                 return@withContext FetchResult.failure(FetchException("Failed to fetch", ex))
@@ -96,27 +128,30 @@ class StocksApi @Inject constructor(
         }
 
     suspend fun getStock(ticker: String): FetchResult<Quote> =
-    withContext(Dispatchers.IO) {
-        try {
-            // Check if it's a MOEX ticker first
-            if (MoexApi.isMoexTicker(ticker)) {
-                val moexApi = MoexApi()
-                val quote = moexApi.fetchQuote(ticker)
-                if (quote != null) {
-                    return@withContext FetchResult.success(quote)
+        withContext(Dispatchers.IO) {
+            try {
+                // Check if it's a MOEX ticker first - NO YAHOO FALLBACK
+                if (MoexApi.isMoexTicker(ticker)) {
+                    val moexApi = MoexApi()
+                    val quote = moexApi.fetchQuote(ticker)
+                    if (quote != null) {
+                        Timber.d("MOEX: Successfully fetched $ticker at ${quote.lastTradePrice} RUB")
+                        return@withContext FetchResult.success(quote)
+                    } else {
+                        Timber.e("MOEX: Failed to fetch $ticker")
+                        return@withContext FetchResult.failure(FetchException("MOEX API failed for $ticker"))
+                    }
                 }
-                Timber.w("MOEX fetch failed for $ticker, trying Yahoo Finance")
+                
+                // Not a MOEX ticker - use Yahoo Finance
+                val quoteNets = getStocksYahoo(listOf(ticker))
+                    ?: return@withContext FetchResult.failure(FetchException("Failed to fetch $ticker"))
+                return@withContext FetchResult.success(quoteNets.first().toQuote())
+            } catch (ex: Exception) {
+                Timber.e(ex)
+                return@withContext FetchResult.failure(FetchException("Failed to fetch $ticker", ex))
             }
-            
-            // Fetch from Yahoo Finance
-            val quoteNets = getStocksYahoo(listOf(ticker))
-                ?: return@withContext FetchResult.failure(FetchException("Failed to fetch $ticker"))
-            return@withContext FetchResult.success(quoteNets.first().toQuote())
-        } catch (ex: Exception) {
-            Timber.e(ex)
-            return@withContext FetchResult.failure(FetchException("Failed to fetch $ticker", ex))
         }
-    }
 
     private suspend fun getStocksYahoo(
         tickerList: List<String>,
