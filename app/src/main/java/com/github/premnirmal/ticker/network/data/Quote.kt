@@ -180,22 +180,21 @@ data class Quote constructor(
     }
 
     fun newsQuery(): String {
-        return "${if (symbol.contains(
-                "."
-            )
-        ) {
-            symbol.substring(
-                0,
-                symbol.indexOf('.')
-            )
+        val cleanSymbol = if (symbol.contains(".")) {
+            symbol.substring(0, symbol.indexOf('.'))
         } else {
             symbol
-        }} ${name.split(
-            " "
-        ).toMutableList().apply { removeAll(
-            arrayOf("Inc.", "Corporation", "PLC", "ORD")
-        )
-        }.take(3).joinToString(" ")} stock"
+        }
+        val nameWords = name.split(" ").toMutableList().apply {
+            removeAll(arrayOf("Inc.", "Corporation", "PLC", "ORD", "ПАО", "ао", "ап", "ОАО"))
+        }.take(3).joinToString(" ")
+
+        // For MOEX stocks, search in both English and Russian
+        return if (stockExchange == "MOEX") {
+            "$cleanSymbol $nameWords акции"
+        } else {
+            "$cleanSymbol $nameWords stock"
+        }
     }
 
     val isMarketOpen: Boolean
@@ -339,7 +338,8 @@ data class Quote constructor(
                 "QAR" to "ر.ق.‏",
                 "RON" to "RON",
                 "RSD" to "дин.",
-                "RUB" to "₽.",
+                "RUB" to "₽",
+                "SUR" to "₽",
                 "RWF" to "FR",
                 "SAR" to "ر.س.‏",
                 "SDG" to "SDG",

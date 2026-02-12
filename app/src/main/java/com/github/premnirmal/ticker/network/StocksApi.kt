@@ -109,9 +109,11 @@ class StocksApi @Inject constructor(
                 
                 val orderedQuotes = ArrayList<Quote>()
                 for (ticker in tickerList) {
+                    val cleanedTicker = MoexApi.cleanTicker(ticker)
                     val quote = quotes.find { 
                         it.symbol.equals(ticker, ignoreCase = true) || 
-                        it.symbol.equals(ticker.replace(".ME", "").replace(".MOEX", ""), ignoreCase = true) 
+                        it.symbol.equals("$cleanedTicker.ME", ignoreCase = true) ||
+                        MoexApi.cleanTicker(it.symbol).equals(cleanedTicker, ignoreCase = true)
                     }
                     if (quote != null) {
                         orderedQuotes.add(quote)
