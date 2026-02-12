@@ -3,13 +3,31 @@ package com.github.premnirmal.ticker.network
 import com.github.premnirmal.ticker.network.data.Quote
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.ConnectionPool
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONObject
-import java.net.URL
+import timber.log.Timber
+import java.util.concurrent.TimeUnit
 
 class MoexApi {
 
     companion object {
         const val BASE_URL = "https://iss.moex.com/iss"
+
+        // Singleton OkHttpClient shared across ALL MoexApi instances
+        // Uses connection pooling so subsequent requests reuse TCP connections
+        val client: OkHttpClient by lazy {
+            Timber.d("MOEX: Creating shared OkHttpClient")
+            OkHttpClient.Builder()
+                .connectTimeout(8, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
+                .writeTimeout(5, TimeUnit.SECONDS)
+                .connectionPool(ConnectionPool(2, 5, TimeUnit.MINUTES))
+                .followRedirects(true)
+                .retryOnConnectionFailure(true)
+                .build()
+        }
 
         val MOEX_TICKERS = setOf(
             "OZON", "SBER", "GAZP", "LKOH", "YNDX", "ROSN",
@@ -33,177 +51,104 @@ class MoexApi {
         }
     }
 
-    suspend fun fetchQuote(ticker: String, board: String = "TQBR"): Quote? {
-        return withContext(Dispatchers.IO) {
-            try {
-                val cleanTicker = cleanTicker(ticker)
-                val url = "$BASE_URL/engines/stock/markets/shares/boards/$board/securities/$cleanTicker.json"
-                val response = URL(url).readText()
-                parseToQuote(cleanTicker, response)
-            } catch (e: Exception) {
-                e.printStackTrace()
+    private fun httpGet(url: String): String? {
+        return try {
+            val request = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .build()
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                response.body?.string()
+            } else {
+                Timber.e("MOEX HTTP ${response.code} for $url")
                 null
             }
-        }
-    }
-
-    /**
-     * Fetch candle data from MOEX ISS for chart display.
-     * @param interval: 1=1min, 10=10min, 60=1hour, 24=1day, 7=1week, 31=1month
-     */
-    suspend fun fetchCandles(ticker: String, from: String, till: String? = null, interval: Int = 24, board: String = "TQBR"): List<MoexCandle> {
-        return withContext(Dispatchers.IO) {
-            try {
-                val cleanTicker = cleanTicker(ticker)
-                val tillParam = if (till != null) "&till=$till" else ""
-                val url = "$BASE_URL/engines/stock/markets/shares/boards/$board/securities/$cleanTicker/candles.json?from=$from&interval=$interval$tillParam"
-                val response = URL(url).readText()
-                parseCandles(response)
-            } catch (e: Exception) {
-                e.printStackTrace()
-                emptyList()
-            }
-        }
-    }
-
-    private fun parseCandles(jsonResponse: String): List<MoexCandle> {
-        val candles = mutableListOf<MoexCandle>()
-        try {
-            val json = JSONObject(jsonResponse)
-            val candlesObj = json.getJSONObject("candles")
-            val columns = candlesObj.getJSONArray("columns")
-            val data = candlesObj.getJSONArray("data")
-
-            val openIdx = findColumnIndex(columns, "open")
-            val closeIdx = findColumnIndex(columns, "close")
-            val highIdx = findColumnIndex(columns, "high")
-            val lowIdx = findColumnIndex(columns, "low")
-            val volumeIdx = findColumnIndex(columns, "volume")
-            val beginIdx = findColumnIndex(columns, "begin")
-            val endIdx = findColumnIndex(columns, "end")
-
-            for (i in 0 until data.length()) {
-                val row = data.getJSONArray(i)
-                val open = row.optDouble(openIdx, Double.NaN)
-                val close = row.optDouble(closeIdx, Double.NaN)
-                val high = row.optDouble(highIdx, Double.NaN)
-                val low = row.optDouble(lowIdx, Double.NaN)
-                if (open.isNaN() || close.isNaN() || high.isNaN() || low.isNaN()) continue
-                candles.add(
-                    MoexCandle(
-                        open = open,
-                        close = close,
-                        high = high,
-                        low = low,
-                        volume = row.optLong(volumeIdx, 0L),
-                        begin = row.optString(beginIdx, ""),
-                        end = row.optString(endIdx, "")
-                    )
-                )
-            }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Timber.e(e, "MOEX HTTP failed: $url")
+            null
         }
-        return candles
     }
 
-    private fun parseToQuote(ticker: String, jsonResponse: String): Quote? {
+    suspend fun fetchQuote(ticker: String): Quote? = withContext(Dispatchers.IO) {
         try {
-            val json = JSONObject(jsonResponse)
+            val clean = cleanTicker(ticker)
+            val url = "$BASE_URL/engines/stock/markets/shares/securities/$clean.json?iss.meta=off&iss.only=securities,marketdata"
+            Timber.d("MOEX fetch: $url")
+            val body = httpGet(url) ?: return@withContext null
+            parseQuote(ticker, clean, body)
+        } catch (e: Exception) {
+            Timber.e(e, "MOEX fetchQuote failed: $ticker")
+            null
+        }
+    }
 
-            // Parse marketdata
-            val marketdataObj = json.getJSONObject("marketdata")
-            val mdColumns = marketdataObj.getJSONArray("columns")
-            val mdData = marketdataObj.getJSONArray("data")
+    suspend fun fetchCandles(
+        ticker: String,
+        from: String,
+        till: String? = null,
+        interval: Int = 24
+    ): List<MoexCandle> = withContext(Dispatchers.IO) {
+        try {
+            val clean = cleanTicker(ticker)
+            val tillParam = if (till != null) "&till=$till" else ""
+            val url = "$BASE_URL/engines/stock/markets/shares/boards/TQBR/securities/$clean/candles.json?from=$from&interval=$interval$tillParam&iss.meta=off"
+            Timber.d("MOEX candles: $url")
+            val body = httpGet(url) ?: return@withContext emptyList()
+            parseCandles(body)
+        } catch (e: Exception) {
+            Timber.e(e, "MOEX fetchCandles failed: $ticker")
+            emptyList()
+        }
+    }
 
-            if (mdData.length() == 0) return null
+    // --- Parsers ---
 
-            // MOEX returns multiple boards - find TQBR (main board)
-            var mdRow: org.json.JSONArray? = null
-            val boardIdIndex = findColumnIndex(mdColumns, "BOARDID")
+    private fun parseQuote(originalTicker: String, clean: String, json: String): Quote? {
+        try {
+            val root = JSONObject(json)
 
-            for (i in 0 until mdData.length()) {
-                val row = mdData.getJSONArray(i)
-                val boardId = if (boardIdIndex >= 0) row.optString(boardIdIndex, "") else ""
-                if (boardId == "TQBR") {
-                    mdRow = row
-                    break
-                }
-            }
+            val secObj = root.getJSONObject("securities")
+            val secCols = secObj.getJSONArray("columns")
+            val secData = secObj.getJSONArray("data")
+            if (secData.length() == 0) { Timber.e("MOEX: empty securities for $clean"); return null }
 
-            if (mdRow == null) mdRow = mdData.getJSONArray(0)
+            val mdObj = root.getJSONObject("marketdata")
+            val mdCols = mdObj.getJSONArray("columns")
+            val mdData = mdObj.getJSONArray("data")
+            if (mdData.length() == 0) { Timber.e("MOEX: empty marketdata for $clean"); return null }
 
-            // Parse securities for the name and previous price
-            val securitiesObj = json.getJSONObject("securities")
-            val secColumns = securitiesObj.getJSONArray("columns")
-            val secData = securitiesObj.getJSONArray("data")
+            // Find TQBR rows
+            val secRow = findRow(secData, colIdx(secCols, "BOARDID"), "TQBR") ?: secData.getJSONArray(0)
+            val mdRow = findRow(mdData, colIdx(mdCols, "BOARDID"), "TQBR") ?: mdData.getJSONArray(0)
 
-            if (secData.length() == 0) return null
+            // Prices
+            var last = dbl(mdRow, colIdx(mdCols, "LAST"))
+            val lclose = dbl(mdRow, colIdx(mdCols, "LCLOSEPRICE"))
+            val prev = dbl(secRow, colIdx(secCols, "PREVPRICE")) ?: 0.0
 
-            // Find matching SECID row
-            var secRow: org.json.JSONArray? = null
-            val secIdIndex = findColumnIndex(secColumns, "SECID")
+            if (last == null || last == 0.0) last = lclose
+            if (last == null || last == 0.0) last = prev
+            if (last == 0.0 && prev == 0.0) { Timber.e("MOEX: no price for $clean"); return null }
 
-            for (i in 0 until secData.length()) {
-                val row = secData.getJSONArray(i)
-                val secId = if (secIdIndex >= 0) row.optString(secIdIndex, "") else ""
-                if (secId.equals(ticker, ignoreCase = true)) {
-                    secRow = row
-                    break
-                }
-            }
+            val open = dbl(mdRow, colIdx(mdCols, "OPEN")) ?: last
+            val high = dbl(mdRow, colIdx(mdCols, "HIGH")) ?: last
+            val low = dbl(mdRow, colIdx(mdCols, "LOW")) ?: last
+            val pct = dbl(mdRow, colIdx(mdCols, "LASTTOPREVPRICE")) ?: 0.0
+            val vol = mdRow.optLong(colIdx(mdCols, "VOLTODAY"), 0L)
 
-            if (secRow == null) secRow = secData.getJSONArray(0)
+            val shortName = secRow.optString(colIdx(secCols, "SHORTNAME"), clean)
+            val secName = secRow.optString(colIdx(secCols, "SECNAME"), "")
+            val name = if (secName.isNotEmpty() && secName != "null") secName else shortName
+            val change = if (prev != 0.0) last - prev else 0.0
 
-            // Find column indices in marketdata
-            val lastIndex = findColumnIndex(mdColumns, "LAST")
-            val openIndex = findColumnIndex(mdColumns, "OPEN")
-            val highIndex = findColumnIndex(mdColumns, "HIGH")
-            val lowIndex = findColumnIndex(mdColumns, "LOW")
-            val changePctIndex = findColumnIndex(mdColumns, "LASTTOPREVPRICE")
-            val volIndex = findColumnIndex(mdColumns, "VOLTODAY")
-            val valIndex = findColumnIndex(mdColumns, "VALTODAY")
-            val lclosePriceIndex = findColumnIndex(mdColumns, "LCLOSEPRICE")
+            Timber.d("MOEX: $clean=$last prev=$prev Δ=$change (${pct}%) vol=$vol")
 
-            // Find column indices in securities
-            val nameIndex = findColumnIndex(secColumns, "SHORTNAME")
-            val secNameIndex = findColumnIndex(secColumns, "SECNAME")
-            val prevPriceIndex = findColumnIndex(secColumns, "PREVPRICE")
-
-            // Extract LAST price — fall back to LCLOSEPRICE if LAST is null/0
-            var last = mdRow.optDouble(lastIndex, 0.0)
-            if (last == 0.0 || last.isNaN()) {
-                last = mdRow.optDouble(lclosePriceIndex, 0.0)
-            }
-
-            val prevPrice = secRow.optDouble(prevPriceIndex, 0.0)
-
-            // If both last and prevPrice are 0, there's no useful data
-            if (last == 0.0 && prevPrice == 0.0) return null
-
-            // If last is still 0, use prevPrice as best estimate
-            if (last == 0.0 || last.isNaN()) last = prevPrice
-
-            val open = mdRow.optDouble(openIndex, Double.NaN).let { if (it.isNaN() || it == 0.0) last else it }
-            val high = mdRow.optDouble(highIndex, Double.NaN).let { if (it.isNaN() || it == 0.0) last else it }
-            val low = mdRow.optDouble(lowIndex, Double.NaN).let { if (it.isNaN() || it == 0.0) last else it }
-            val changePct = mdRow.optDouble(changePctIndex, Double.NaN).let { if (it.isNaN()) 0.0 else it }
-            val volume = mdRow.optLong(volIndex, 0L)
-
-            // Extract name — prefer SECNAME (full name), fallback to SHORTNAME
-            val shortName = secRow.optString(nameIndex, ticker)
-            val secName = secRow.optString(secNameIndex, "")
-            val name = if (secName.isNotEmpty()) secName else shortName
-
-            // Calculate absolute change
-            val change = if (prevPrice != 0.0) last - prevPrice else 0.0
-
-            // Create Quote
-            val quote = Quote(
-                symbol = "$ticker.ME",
+            return Quote(
+                symbol = originalTicker,
                 name = name,
                 lastTradePrice = last.toFloat(),
-                changeInPercent = changePct.toFloat(),
+                changeInPercent = pct.toFloat(),
                 change = change.toFloat()
             ).apply {
                 stockExchange = "MOEX"
@@ -211,36 +156,64 @@ class MoexApi {
                 dayHigh = high.toFloat()
                 dayLow = low.toFloat()
                 this.open = open.toFloat()
-                previousClose = prevPrice.toFloat()
-                regularMarketVolume = volume
+                previousClose = prev.toFloat()
+                regularMarketVolume = vol
                 longName = name
-                marketState = "REGULAR"  // MOEX doesn't report this; assume regular during fetch
+                marketState = "REGULAR"
                 tradeable = true
             }
-
-            return quote
         } catch (e: Exception) {
-            e.printStackTrace()
+            Timber.e(e, "MOEX parseQuote error: $clean")
             return null
         }
     }
 
-    private fun findColumnIndex(columns: org.json.JSONArray, name: String): Int {
-        for (i in 0 until columns.length()) {
-            if (columns.getString(i) == name) {
-                return i
+    private fun parseCandles(json: String): List<MoexCandle> {
+        val out = mutableListOf<MoexCandle>()
+        try {
+            val root = JSONObject(json)
+            val obj = root.getJSONObject("candles")
+            val cols = obj.getJSONArray("columns")
+            val data = obj.getJSONArray("data")
+
+            val oi = colIdx(cols, "open"); val ci = colIdx(cols, "close")
+            val hi = colIdx(cols, "high"); val li = colIdx(cols, "low")
+            val vi = colIdx(cols, "volume"); val bi = colIdx(cols, "begin"); val ei = colIdx(cols, "end")
+
+            for (i in 0 until data.length()) {
+                val r = data.getJSONArray(i)
+                val o = dbl(r, oi) ?: continue
+                val c = dbl(r, ci) ?: continue
+                val h = dbl(r, hi) ?: continue
+                val l = dbl(r, li) ?: continue
+                out.add(MoexCandle(o, c, h, l, r.optLong(vi, 0), r.optString(bi, ""), r.optString(ei, "")))
             }
+            Timber.d("MOEX: parsed ${out.size} candles")
+        } catch (e: Exception) {
+            Timber.e(e, "MOEX parseCandles error")
         }
-        return -1
+        return out
     }
 
-    data class MoexCandle(
-        val open: Double,
-        val close: Double,
-        val high: Double,
-        val low: Double,
-        val volume: Long,
-        val begin: String,
-        val end: String
-    )
+    // --- Tiny helpers ---
+
+    private fun dbl(arr: org.json.JSONArray, idx: Int): Double? {
+        if (idx < 0 || idx >= arr.length() || arr.isNull(idx)) return null
+        return try { val v = arr.getDouble(idx); if (v.isNaN() || v.isInfinite()) null else v } catch (_: Exception) { null }
+    }
+
+    private fun colIdx(cols: org.json.JSONArray, name: String): Int {
+        for (i in 0 until cols.length()) if (cols.getString(i) == name) return i; return -1
+    }
+
+    private fun findRow(data: org.json.JSONArray, boardIdx: Int, board: String): org.json.JSONArray? {
+        if (boardIdx < 0) return null
+        for (i in 0 until data.length()) {
+            val row = data.getJSONArray(i)
+            if (!row.isNull(boardIdx) && row.optString(boardIdx) == board) return row
+        }
+        return null
+    }
+
+    data class MoexCandle(val open: Double, val close: Double, val high: Double, val low: Double, val volume: Long, val begin: String, val end: String)
 }

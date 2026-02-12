@@ -49,7 +49,7 @@ class StocksProvider constructor(
     companion object {
         private const val LAST_FETCHED = "LAST_FETCHED"
         private const val NEXT_FETCH = "NEXT_FETCH"
-        private val DEFAULT_STOCKS = arrayOf("^GSPC", "^DJI", "GOOG", "AAPL", "MSFT")
+        private val DEFAULT_STOCKS = arrayOf("OZON")
         const val DEFAULT_INTERVAL_MS: Long = 15_000L
     }
 

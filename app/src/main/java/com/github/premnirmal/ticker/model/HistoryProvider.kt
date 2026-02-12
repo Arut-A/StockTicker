@@ -88,12 +88,13 @@ class HistoryProvider @Inject constructor(
         return@withContext FetchResult.success(chartData)
     }
 
+    private val moexApi = MoexApi()
+
     private suspend fun fetchMoexChartData(
         symbol: String,
         range: Range
     ): FetchResult<ChartData> {
         try {
-            val moexApi = MoexApi()
             val fromDate = LocalDate.now().minusDays(range.duration.toDays())
             val from = fromDate.format(DateTimeFormatter.ISO_LOCAL_DATE)
             val interval = range.moexInterval()

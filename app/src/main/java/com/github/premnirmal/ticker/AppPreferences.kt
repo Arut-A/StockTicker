@@ -51,7 +51,7 @@ class AppPreferences @Inject constructor(
 
     val updateIntervalMs: Long
         get() {
-            return when (sharedPreferences.getInt(UPDATE_INTERVAL, 1)) {
+            return when (sharedPreferences.getInt(UPDATE_INTERVAL, 0)) {
                 0 -> 5 * 60 * 1000L
                 1 -> 15 * 60 * 1000L
                 2 -> 30 * 60 * 1000L
@@ -89,12 +89,12 @@ class AppPreferences @Inject constructor(
     }
 
     fun startTime(): Time {
-        val startTimeString = sharedPreferences.getString(START_TIME, "09:30")!!
+        val startTimeString = sharedPreferences.getString(START_TIME, "06:00")!!
         return parseTime(startTimeString)
     }
 
     fun endTime(): Time {
-        val endTimeString = sharedPreferences.getString(END_TIME, "16:00")!!
+        val endTimeString = sharedPreferences.getString(END_TIME, "23:50")!!
         return parseTime(endTimeString)
     }
 
@@ -105,7 +105,7 @@ class AppPreferences @Inject constructor(
     }
 
     fun updateDaysRaw(): Set<String> {
-        val defaultSet = setOf("1", "2", "3", "4", "5")
+        val defaultSet = setOf("1", "2", "3", "4", "5", "6", "7")
         var selectedDays = sharedPreferences.getStringSet(UPDATE_DAYS, defaultSet)!!
         if (selectedDays.isEmpty()) {
             selectedDays = defaultSet
