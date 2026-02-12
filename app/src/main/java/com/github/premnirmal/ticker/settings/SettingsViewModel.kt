@@ -128,6 +128,19 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setFastPollingEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            appPreferences.setFastPollingEnabled(enabled)
+            if (enabled) {
+                // start fast polling for default ticker OZON at higher frequency (5s)
+                stocksProvider.startFastPollingTicker("OZON", 5000L)
+            } else {
+                stocksProvider.stopFastPollingTicker()
+            }
+            _settings.emit(buildData(widgetDataProvider.dataForWidgetId(AppWidgetManager.INVALID_APPWIDGET_ID)))
+        }
+    }
+
     fun setReceiveNotificationAlerts(receive: Boolean, initializeHandler: Boolean = false) {
         viewModelScope.launch {
             appPreferences.setNotificationAlerts(receive)
@@ -209,6 +222,8 @@ class SettingsViewModel @Inject constructor(
             endTime = appPreferences.endTime(),
             autoSort = if (!widgetDataProvider.hasWidget()) widgetData.autoSortEnabled() else null,
             roundToTwoDp = appPreferences.roundToTwoDecimalPlaces()
+            ,
+            fastPollingEnabled = appPreferences.isFastPollingEnabled()
         )
     }
 
@@ -228,5 +243,6 @@ class SettingsViewModel @Inject constructor(
         val endTime: AppPreferences.Time,
         val autoSort: Boolean?,
         val roundToTwoDp: Boolean,
+        val fastPollingEnabled: Boolean,
     ) : Parcelable
 }

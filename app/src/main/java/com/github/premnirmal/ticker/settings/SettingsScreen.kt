@@ -211,6 +211,17 @@ private fun LazyListScope.settingsItems(
         Divider()
     }
     item {
+        val checked = settingsData.fastPollingEnabled
+        CheckboxPreference(
+            title = stringResource(id = R.string.fast_polling),
+            subtitle = stringResource(id = R.string.fast_polling_desc),
+            checked = checked
+        ) {
+            viewModel.setFastPollingEnabled(it)
+        }
+        Divider()
+    }
+    item {
         val context = LocalContext.current
         val checked = settingsData.notificationAlerts
         val state = rememberPermissionState(Manifest.permission.POST_NOTIFICATIONS) { granted ->

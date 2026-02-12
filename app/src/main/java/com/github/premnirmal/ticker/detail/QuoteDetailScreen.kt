@@ -177,7 +177,7 @@ private fun QuoteDetailContent(
                     IconButton(
                         onClick = {
                             if (!isRefreshing) {
-                                viewModel.fetchAll(quote)
+                                viewModel.fetchAll(quote, true)
                             }
                         }
                     ) {

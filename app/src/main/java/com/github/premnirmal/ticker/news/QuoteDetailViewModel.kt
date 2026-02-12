@@ -218,11 +218,18 @@ class QuoteDetailViewModel @Inject constructor(
         }
     }
 
-    fun fetchAll(quote: Quote) {
+    fun fetchAll(quote: Quote, forceRefresh: Boolean = false) {
         _isRefreshing.value = true
         viewModelScope.launch {
             fetchQuoteInternal(ticker = quote.symbol)
-            fetchNewsInternal(quote = quote, truncate = false)
+            val now = System.currentTimeMillis()
+            val lastNews = appPreferences.getLastNewsFetchMs()
+            val oneDayMs = 24 * 60 * 60 * 1000L
+            if (forceRefresh || now - lastNews >= oneDayMs) {
+                fetchNewsInternal(quote = quote, truncate = false)
+                appPreferences.setLastNewsFetchMs(System.currentTimeMillis())
+            }
+            // Chart data has its own 24-hour cache inside HistoryProvider
             fetchChartDataInternal(symbol = quote.symbol, selectedRange = range.value)
             _isRefreshing.value = false
         }

@@ -51,14 +51,8 @@ class AppPreferences @Inject constructor(
 
     val updateIntervalMs: Long
         get() {
-            return when (sharedPreferences.getInt(UPDATE_INTERVAL, 0)) {
-                0 -> 5 * 60 * 1000L
-                1 -> 15 * 60 * 1000L
-                2 -> 30 * 60 * 1000L
-                3 -> 45 * 60 * 1000L
-                4 -> 60 * 60 * 1000L
-                else -> 15 * 60 * 1000L
-            }
+            // Default update interval: 15 minutes (price updates).
+            return 15 * 60 * 1000L
         }
 
     val selectedDecimalFormat: Format
@@ -147,6 +141,18 @@ class AppPreferences @Inject constructor(
 
     fun tutorialShown(): Boolean {
         return sharedPreferences.getBoolean(TUTORIAL_SHOWN, false)
+    }
+
+    fun getLastNewsFetchMs(): Long = sharedPreferences.getLong(LAST_NEWS_FETCH, 0L)
+
+    fun setLastNewsFetchMs(ms: Long) {
+        sharedPreferences.edit { putLong(LAST_NEWS_FETCH, ms) }
+    }
+
+    fun isFastPollingEnabled(): Boolean = sharedPreferences.getBoolean(FAST_POLLING, false)
+
+    fun setFastPollingEnabled(enabled: Boolean) {
+        sharedPreferences.edit { putBoolean(FAST_POLLING, enabled) }
     }
 
     fun setTutorialShown(shown: Boolean) {
@@ -315,6 +321,7 @@ class AppPreferences @Inject constructor(
         const val SHOW_CURRENCY = "SHOW_CURRENCY"
         const val PERCENT = "PERCENT"
         const val CRUMB = "CRUMB"
+        const val FAST_POLLING = "FAST_POLLING"
         const val APP_VERSION_CODE = "APP_VERSION_CODE"
         const val APP_THEME = "APP_THEME"
         const val SYSTEM = 0

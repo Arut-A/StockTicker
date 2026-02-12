@@ -34,11 +34,25 @@ class HistoryProvider @Inject constructor(
 ) {
 
     private var cachedData: WeakReference<Pair<String, ChartData>>? = null
+    // per-symbol+range cache with timestamp (ms)
+    private val cache: MutableMap<String, Pair<ChartData, Long>> = mutableMapOf()
 
     suspend fun fetchDataByRange(
         symbol: String,
         range: Range
     ): FetchResult<ChartData> = withContext(Dispatchers.IO) {
+        // Check per-symbol+range cache (24 hours)
+        try {
+            val key = "$symbol:${range.duration.toDays()}"
+            val cached = cache[key]
+            val now = System.currentTimeMillis()
+            val oneDayMs = 24 * 60 * 60 * 1000L
+            if (cached != null && now - cached.second < oneDayMs) {
+                return@withContext FetchResult.success(cached.first)
+            }
+        } catch (e: Exception) {
+            // ignore cache errors and continue to fetch
+        }
         // For MOEX tickers, use MOEX ISS candle API
         if (MoexApi.isMoexTicker(symbol)) {
             return@withContext fetchMoexChartData(symbol, range)
@@ -84,6 +98,11 @@ class HistoryProvider @Inject constructor(
             return@withContext FetchResult.failure(
                 FetchException("Error fetching datapoints", ex)
             )
+        }
+        try {
+            val key = "$symbol:${range.duration.toDays()}"
+            cache[key] = Pair(chartData, System.currentTimeMillis())
+        } catch (_: Exception) {
         }
         return@withContext FetchResult.success(chartData)
     }
@@ -135,13 +154,17 @@ class HistoryProvider @Inject constructor(
             val chartPreviousClose = dataPoints.first().openVal
             val regularMarketPrice = dataPoints.last().closeVal
 
-            return FetchResult.success(
-                ChartData(
-                    chartPreviousClose = chartPreviousClose,
-                    regularMarketPrice = regularMarketPrice,
-                    dataPoints = dataPoints
-                )
+            val cd = ChartData(
+                chartPreviousClose = chartPreviousClose,
+                regularMarketPrice = regularMarketPrice,
+                dataPoints = dataPoints
             )
+            try {
+                val key = "$symbol:${range.duration.toDays()}"
+                cache[key] = Pair(cd, System.currentTimeMillis())
+            } catch (_: Exception) {
+            }
+            return FetchResult.success(cd)
         } catch (ex: Exception) {
             Timber.w(ex)
             return FetchResult.failure(FetchException("Error fetching MOEX chart data", ex))

@@ -21,12 +21,3 @@ interface GoogleNewsApi {
     suspend fun getBusinessNews(): NewsRssFeed
 }
 
-interface YahooFinanceNewsApi {
-    @GET("rssindex")
-    suspend fun getNewsFeed(): NewsRssFeed
-}
-
-interface YahooFinanceMostActive {
-    @GET("most-active")
-    suspend fun getMostActive(): Response<Document>
-}
