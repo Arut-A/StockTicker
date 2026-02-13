@@ -50,7 +50,8 @@ class StocksProvider constructor(
         private const val LAST_FETCHED = "LAST_FETCHED"
         private const val NEXT_FETCH = "NEXT_FETCH"
         private val DEFAULT_STOCKS = arrayOf("OZON")
-        const val DEFAULT_INTERVAL_MS: Long = 15_000L
+        const val DEFAULT_INTERVAL_MS: Long = 900_000L // 15 minutes
+        private const val MIN_FETCH_INTERVAL_MS: Long = 10_000L // 10 seconds minimum between fetches
     }
 
     val tickers: StateFlow<List<String>>
@@ -80,15 +81,18 @@ class StocksProvider constructor(
         val nextFetch = preferences.getLong(NEXT_FETCH, 0L)
         _nextFetch.value = nextFetch
         runBlocking { fetchLocal() }
-        // Always fetch fresh data on startup
-        coroutineScope.launch {
-            fetch()
-        }
         this.tickerSet.addAll(tickers)
         if (this.tickerSet.isEmpty()) {
             this.tickerSet.addAll(DEFAULT_STOCKS)
         }
         _tickers.value = tickerSet.toList()
+        // Only fetch on startup if cache is stale (older than MIN_FETCH_INTERVAL_MS)
+        val timeSinceLastFetch = clock.currentTimeMillis() - lastFetched
+        if (timeSinceLastFetch > MIN_FETCH_INTERVAL_MS) {
+            coroutineScope.launch {
+                fetch()
+            }
+        }
     }
 
     private suspend fun fetchLocal() = withContext(Dispatchers.IO) {
@@ -177,6 +181,12 @@ class StocksProvider constructor(
             Timber.d("No tickers/symbols to fetch")
             FetchResult.failure<List<Quote>>(FetchException("No symbols in portfolio"))
         } else {
+            // Debouncing: prevent fetches that are too close together
+            val timeSinceLastFetch = clock.currentTimeMillis() - lastFetched
+            if (allowScheduling && timeSinceLastFetch < MIN_FETCH_INTERVAL_MS) {
+                Timber.d("Fetch throttled: only ${timeSinceLastFetch}ms since last fetch")
+                return@withContext FetchResult.success(quoteMap.values.filter { tickerSet.contains(it.symbol) }.toList())
+            }
             return@withContext try {
                 if (allowScheduling) {
                     appPreferences.setRefreshing(true)

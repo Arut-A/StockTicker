@@ -3,7 +3,7 @@ package com.github.premnirmal.ticker.network
 import com.github.premnirmal.ticker.AppPreferences
 import com.github.premnirmal.ticker.BaseUnitTest
 import com.github.premnirmal.ticker.mock.Mocker
-import com.github.premnirmal.ticker.network.data.YahooResponse
+import com.github.premnirmal.ticker.network.data.Quote
 import com.nhaarman.mockitokotlin2.any
 import com.nhaarman.mockitokotlin2.doThrow
 import com.nhaarman.mockitokotlin2.verify
@@ -13,32 +13,31 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
-import retrofit2.Response
 
 @HiltAndroidTest
 class StocksApiTest : BaseUnitTest() {
 
     companion object {
-        val TEST_TICKER_LIST = arrayListOf("SPY", "GOOG", "MSFT", "DIA", "AAPL")
+        val TEST_TICKER_LIST = arrayListOf("OZON", "SBER", "GAZP", "LKOH", "YNDX")
     }
 
-    internal lateinit var yahooFinance: YahooFinance
-    internal lateinit var yahooFinanceCrumb: YahooFinanceCrumb
-    internal lateinit var yahooFinanceInitialLoad: YahooFinanceInitialLoad
+    internal lateinit var moexApi: MoexApi
     internal lateinit var mockPrefs: AppPreferences
 
     private lateinit var stocksApi: StocksApi
 
     @Before fun initMocks() {
         runBlocking {
-            yahooFinance = Mocker.provide(YahooFinance::class)
+            moexApi = Mocker.provide(MoexApi::class)
             mockPrefs = Mocker.provide(AppPreferences::class)
-            yahooFinanceCrumb = Mocker.provide(YahooFinanceCrumb::class)
-            yahooFinanceInitialLoad = Mocker.provide(YahooFinanceInitialLoad::class)
             val suggestionApi = Mocker.provide(SuggestionApi::class)
-            stocksApi = StocksApi(yahooFinanceInitialLoad, yahooFinanceCrumb, yahooFinance, mockPrefs, suggestionApi)
-            val yahooStockList = parseJsonFile<YahooResponse>("YahooQuotes.json")
-            whenever(yahooFinance.getStocks(any())).thenReturn(Response.success(200, yahooStockList))
+            stocksApi = StocksApi(mockPrefs, suggestionApi, moexApi)
+
+            // Mock MOEX responses
+            val mockQuote = Quote(symbol = "OZON", name = "OZON Holdings", lastTradePrice = 2500f)
+            mockQuote.stockExchange = "MOEX"
+            mockQuote.currencyCode = "RUB"
+            whenever(moexApi.fetchQuote(any())).thenReturn(mockQuote)
         }
     }
 
@@ -50,7 +49,7 @@ class StocksApiTest : BaseUnitTest() {
         runBlocking {
             val testTickerList = TEST_TICKER_LIST
             val stocks = stocksApi.getStocks(testTickerList)
-            verify(yahooFinance).getStocks(any())
+            verify(moexApi).fetchQuote(any())
             assertEquals(testTickerList.size, stocks.data.size)
         }
     }
@@ -58,14 +57,14 @@ class StocksApiTest : BaseUnitTest() {
     @Test
     fun testFailure() {
         runBlocking {
-            val error = RuntimeException()
-            doThrow(error).whenever(yahooFinance)
-                .getStocks(any())
+            val error = RuntimeException("Network error")
+            doThrow(error).whenever(moexApi)
+                .fetchQuote(any())
             val testTickerList = TEST_TICKER_LIST
             val result = stocksApi.getStocks(testTickerList)
             assertFalse(result.wasSuccessful)
             assertTrue(result.hasError)
-            verify(yahooFinance).getStocks(any())
+            verify(moexApi).fetchQuote(any())
         }
     }
 }
