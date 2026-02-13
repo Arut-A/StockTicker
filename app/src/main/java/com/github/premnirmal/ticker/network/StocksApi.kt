@@ -13,19 +13,18 @@ import javax.inject.Singleton
 
 @Singleton
 class StocksApi @Inject constructor(
-    // Keep these params so Hilt DI doesn't break — they're just unused now
+    // Yahoo params kept for Hilt DI graph — unused
     private val yahooFinanceInitialLoad: YahooFinanceInitialLoad,
     private val yahooFinanceCrumb: YahooFinanceCrumb,
     private val yahooFinance: YahooFinance,
     private val appPreferences: AppPreferences,
-    private val suggestionApi: SuggestionApi
+    private val suggestionApi: SuggestionApi,
+    // MOEX — actually used
+    private val moexApi: MoexApi
 ) {
-
-    private val moexApi = MoexApi()
 
     suspend fun getSuggestions(query: String): FetchResult<List<SuggestionNet>> =
         withContext(Dispatchers.IO) {
-            // Return empty — user adds MOEX tickers by name directly
             FetchResult.success<List<SuggestionNet>>(emptyList())
         }
 
@@ -37,9 +36,8 @@ class StocksApi @Inject constructor(
                     val q = moexApi.fetchQuote(ticker)
                     if (q != null) {
                         quotes.add(q)
-                        Timber.d("OK: ${q.symbol}=${q.lastTradePrice} RUB")
                     } else {
-                        Timber.w("MOEX null for $ticker")
+                        Timber.w("MOEX null: $ticker")
                     }
                 } catch (e: Exception) {
                     Timber.e(e, "MOEX error: $ticker")
@@ -48,7 +46,6 @@ class StocksApi @Inject constructor(
             if (quotes.isEmpty() && tickerList.isNotEmpty()) {
                 return@withContext FetchResult.failure(FetchException("All fetches failed"))
             }
-            // Return in original order
             val ordered = tickerList.mapNotNull { t ->
                 quotes.find { it.symbol.equals(t, ignoreCase = true) }
             }
@@ -60,11 +57,9 @@ class StocksApi @Inject constructor(
             try {
                 val q = moexApi.fetchQuote(ticker)
                 if (q != null) {
-                    Timber.d("OK: ${q.symbol}=${q.lastTradePrice} RUB")
                     FetchResult.success(q)
                 } else {
-                    Timber.e("MOEX null for $ticker")
-                    FetchResult.failure(FetchException("MOEX returned null for $ticker"))
+                    FetchResult.failure(FetchException("MOEX null for $ticker"))
                 }
             } catch (e: Exception) {
                 Timber.e(e, "MOEX error: $ticker")

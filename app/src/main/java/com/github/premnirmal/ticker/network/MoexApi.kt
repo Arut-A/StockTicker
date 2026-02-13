@@ -1,34 +1,17 @@
 package com.github.premnirmal.ticker.network
 
 import com.github.premnirmal.ticker.network.data.Quote
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import okhttp3.ConnectionPool
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.json.JSONObject
 import timber.log.Timber
-import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+import javax.inject.Singleton
 
-class MoexApi {
+@Singleton
+class MoexApi @Inject constructor(
+    private val api: MoexIssApi
+) {
 
     companion object {
-        const val BASE_URL = "https://iss.moex.com/iss"
-
-        // Singleton OkHttpClient shared across ALL MoexApi instances
-        // Uses connection pooling so subsequent requests reuse TCP connections
-        val client: OkHttpClient by lazy {
-            Timber.d("MOEX: Creating shared OkHttpClient")
-            OkHttpClient.Builder()
-                .connectTimeout(8, TimeUnit.SECONDS)
-                .readTimeout(10, TimeUnit.SECONDS)
-                .writeTimeout(5, TimeUnit.SECONDS)
-                .connectionPool(ConnectionPool(2, 5, TimeUnit.MINUTES))
-                .followRedirects(true)
-                .retryOnConnectionFailure(true)
-                .build()
-        }
-
         val MOEX_TICKERS = setOf(
             "OZON", "SBER", "GAZP", "LKOH", "YNDX", "ROSN",
             "NVTK", "GMKN", "TATN", "MGNT", "AFLT", "MTSS",
@@ -51,34 +34,15 @@ class MoexApi {
         }
     }
 
-    private fun httpGet(url: String): String? {
+    suspend fun fetchQuote(ticker: String): Quote? {
         return try {
-            val request = Request.Builder()
-                .url(url)
-                .header("Accept", "application/json")
-                .build()
-            val response = client.newCall(request).execute()
-            if (response.isSuccessful) {
-                response.body?.string()
-            } else {
-                Timber.e("MOEX HTTP ${response.code} for $url")
-                null
-            }
-        } catch (e: Exception) {
-            Timber.e(e, "MOEX HTTP failed: $url")
-            null
-        }
-    }
-
-    suspend fun fetchQuote(ticker: String): Quote? = withContext(Dispatchers.IO) {
-        try {
             val clean = cleanTicker(ticker)
-            val url = "$BASE_URL/engines/stock/markets/shares/securities/$clean.json?iss.meta=off&iss.only=securities,marketdata"
-            Timber.d("MOEX fetch: $url")
-            val body = httpGet(url) ?: return@withContext null
-            parseQuote(ticker, clean, body)
+            Timber.d("MOEX fetchQuote: $clean")
+            val json = api.getQuote(clean)
+            Timber.d("MOEX response length: ${json.length}")
+            parseQuote(ticker, clean, json)
         } catch (e: Exception) {
-            Timber.e(e, "MOEX fetchQuote failed: $ticker")
+            Timber.e(e, "MOEX fetchQuote FAILED: $ticker")
             null
         }
     }
@@ -88,16 +52,14 @@ class MoexApi {
         from: String,
         till: String? = null,
         interval: Int = 24
-    ): List<MoexCandle> = withContext(Dispatchers.IO) {
-        try {
+    ): List<MoexCandle> {
+        return try {
             val clean = cleanTicker(ticker)
-            val tillParam = if (till != null) "&till=$till" else ""
-            val url = "$BASE_URL/engines/stock/markets/shares/boards/TQBR/securities/$clean/candles.json?from=$from&interval=$interval$tillParam&iss.meta=off"
-            Timber.d("MOEX candles: $url")
-            val body = httpGet(url) ?: return@withContext emptyList()
-            parseCandles(body)
+            Timber.d("MOEX fetchCandles: $clean from=$from interval=$interval")
+            val json = api.getCandles(clean, from, interval, till)
+            parseCandles(json)
         } catch (e: Exception) {
-            Timber.e(e, "MOEX fetchCandles failed: $ticker")
+            Timber.e(e, "MOEX fetchCandles FAILED: $ticker")
             emptyList()
         }
     }
@@ -111,18 +73,16 @@ class MoexApi {
             val secObj = root.getJSONObject("securities")
             val secCols = secObj.getJSONArray("columns")
             val secData = secObj.getJSONArray("data")
-            if (secData.length() == 0) { Timber.e("MOEX: empty securities for $clean"); return null }
+            if (secData.length() == 0) { Timber.e("MOEX: empty securities"); return null }
 
             val mdObj = root.getJSONObject("marketdata")
             val mdCols = mdObj.getJSONArray("columns")
             val mdData = mdObj.getJSONArray("data")
-            if (mdData.length() == 0) { Timber.e("MOEX: empty marketdata for $clean"); return null }
+            if (mdData.length() == 0) { Timber.e("MOEX: empty marketdata"); return null }
 
-            // Find TQBR rows
             val secRow = findRow(secData, colIdx(secCols, "BOARDID"), "TQBR") ?: secData.getJSONArray(0)
             val mdRow = findRow(mdData, colIdx(mdCols, "BOARDID"), "TQBR") ?: mdData.getJSONArray(0)
 
-            // Prices
             var last = dbl(mdRow, colIdx(mdCols, "LAST"))
             val lclose = dbl(mdRow, colIdx(mdCols, "LCLOSEPRICE"))
             val prev = dbl(secRow, colIdx(secCols, "PREVPRICE")) ?: 0.0
@@ -142,7 +102,7 @@ class MoexApi {
             val name = if (secName.isNotEmpty() && secName != "null") secName else shortName
             val change = if (prev != 0.0) last - prev else 0.0
 
-            Timber.d("MOEX: $clean=$last prev=$prev Δ=$change (${pct}%) vol=$vol")
+            Timber.d("MOEX: $clean=$last RUB prev=$prev Δ=$change ($pct%)")
 
             return Quote(
                 symbol = originalTicker,
@@ -188,14 +148,14 @@ class MoexApi {
                 val l = dbl(r, li) ?: continue
                 out.add(MoexCandle(o, c, h, l, r.optLong(vi, 0), r.optString(bi, ""), r.optString(ei, "")))
             }
-            Timber.d("MOEX: parsed ${out.size} candles")
+            Timber.d("MOEX: ${out.size} candles parsed")
         } catch (e: Exception) {
             Timber.e(e, "MOEX parseCandles error")
         }
         return out
     }
 
-    // --- Tiny helpers ---
+    // --- Helpers ---
 
     private fun dbl(arr: org.json.JSONArray, idx: Int): Double? {
         if (idx < 0 || idx >= arr.length() || arr.isNull(idx)) return null

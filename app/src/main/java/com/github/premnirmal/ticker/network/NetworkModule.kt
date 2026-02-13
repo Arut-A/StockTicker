@@ -29,8 +29,8 @@ import javax.inject.Singleton
 class NetworkModule {
 
     companion object {
-        internal const val CONNECTION_TIMEOUT: Long = 5000
-        internal const val READ_TIMEOUT: Long = 5000
+        internal const val CONNECTION_TIMEOUT: Long = 15000
+        internal const val READ_TIMEOUT: Long = 15000
     }
 
     @Provides @Singleton
@@ -45,6 +45,18 @@ class NetworkModule {
                 .connectTimeout(CONNECTION_TIMEOUT, TimeUnit.MILLISECONDS)
                 .build()
         return okHttpClient
+    }
+
+    @Provides @Singleton
+    internal fun provideMoexIssApi(
+        okHttpClient: OkHttpClient
+    ): MoexIssApi {
+        val retrofit = Retrofit.Builder()
+            .client(okHttpClient)
+            .baseUrl("https://iss.moex.com/iss/")
+            .addConverterFactory(ScalarsConverterFactory.create())
+            .build()
+        return retrofit.create(MoexIssApi::class.java)
     }
 
     @Named("yahoo")

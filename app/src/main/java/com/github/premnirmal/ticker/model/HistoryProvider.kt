@@ -18,7 +18,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.io.Serializable
-import java.lang.ref.WeakReference
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -29,11 +28,9 @@ import javax.inject.Singleton
 
 @Singleton
 class HistoryProvider @Inject constructor(
-    private val chartApi: ChartApi // kept for Hilt DI, unused
+    private val chartApi: ChartApi, // kept for Hilt DI graph
+    private val moexApi: MoexApi
 ) {
-
-    private val moexApi = MoexApi()
-    private var cachedData: WeakReference<Pair<String, ChartData>>? = null
 
     suspend fun fetchDataByRange(
         symbol: String,
@@ -97,9 +94,6 @@ class HistoryProvider @Inject constructor(
         }
     }
 
-    /**
-     * MOEX candle intervals: 1=1min, 10=10min, 60=1hr, 24=1day, 7=1week, 31=1month
-     */
     private fun Range.moexInterval(): Int = when (this) {
         ONE_DAY -> 10
         TWO_WEEKS -> 60
