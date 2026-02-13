@@ -47,7 +47,37 @@ class NetworkModule {
         return okHttpClient
     }
 
-    // Yahoo-specific HTTP client removed — app no longer uses Yahoo APIs.
+    @Named("yahoo")
+    @Provides
+    @Singleton
+    internal fun provideHttpClientForYahoo(
+        crumbInterceptor: CrumbInterceptor,
+        cookieJar: YahooFinanceCookies
+    ): OkHttpClient {
+        val logger = HttpLoggingInterceptor()
+        logger.level =
+            if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE
+        val okHttpClient =
+            OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    val newRequest = chain.request()
+                        .newBuilder()
+                        .removeHeader("User-Agent")
+                        .addHeader(
+                            "User-Agent",
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+                        )
+                        .build()
+                    chain.proceed(newRequest)
+                }
+                .addInterceptor(logger)
+                .addInterceptor(crumbInterceptor)
+                .cookieJar(cookieJar)
+                .readTimeout(READ_TIMEOUT, TimeUnit.MILLISECONDS)
+                .connectTimeout(CONNECTION_TIMEOUT, TimeUnit.MILLISECONDS)
+                .build()
+        return okHttpClient
+    }
 
     @Provides @Singleton
     internal fun provideJson(): Json {
@@ -65,9 +95,62 @@ class NetworkModule {
         return json.asConverterFactory("application/json".toMediaType())
     }
 
-    // Suggestion API removed — suggestions no longer fetched from Yahoo.
+    @Provides @Singleton
+    internal fun provideSuggestionsApi(
+        @ApplicationContext context: Context,
+        @Named("yahoo") okHttpClient: OkHttpClient,
+        converterFactory: Converter.Factory
+    ): SuggestionApi {
+        val retrofit = Retrofit.Builder()
+            .client(okHttpClient)
+            .baseUrl(context.getString(R.string.suggestions_endpoint))
+            .addConverterFactory(converterFactory)
+            .build()
+        return retrofit.create(SuggestionApi::class.java)
+    }
 
-    // Yahoo providers removed.
+    @Provides @Singleton
+    internal fun provideYahooFinance(
+        @ApplicationContext context: Context,
+        @Named("yahoo") okHttpClient: OkHttpClient,
+        converterFactory: Converter.Factory
+    ): YahooFinance {
+        val retrofit = Retrofit.Builder()
+            .client(okHttpClient)
+            .baseUrl(context.getString(R.string.yahoo_endpoint))
+            .addConverterFactory(converterFactory)
+            .build()
+        val yahooFinance = retrofit.create(YahooFinance::class.java)
+        return yahooFinance
+    }
+
+    @Provides @Singleton
+    internal fun provideYahooFinanceInitialLoad(
+        @ApplicationContext context: Context,
+        @Named("yahoo") okHttpClient: OkHttpClient
+    ): YahooFinanceInitialLoad {
+        val retrofit = Retrofit.Builder()
+            .client(okHttpClient)
+            .addConverterFactory(ScalarsConverterFactory.create())
+            .baseUrl(context.getString(R.string.yahoo_initial_load_endpoint))
+            .build()
+        val yahooFinance = retrofit.create(YahooFinanceInitialLoad::class.java)
+        return yahooFinance
+    }
+
+    @Provides @Singleton
+    internal fun provideYahooFinanceCrumb(
+        @ApplicationContext context: Context,
+        @Named("yahoo") okHttpClient: OkHttpClient
+    ): YahooFinanceCrumb {
+        val retrofit = Retrofit.Builder()
+            .client(okHttpClient)
+            .addConverterFactory(ScalarsConverterFactory.create())
+            .baseUrl(context.getString(R.string.yahoo_endpoint))
+            .build()
+        val yahooFinance = retrofit.create(YahooFinanceCrumb::class.java)
+        return yahooFinance
+    }
 
     @Provides @Singleton
     internal fun provideApeWisdom(
@@ -84,7 +167,18 @@ class NetworkModule {
         return apewisdom
     }
 
-    // Yahoo "most active" provider removed.
+    @Provides @Singleton
+    internal fun provideYahooFinanceMostActive(
+        @ApplicationContext context: Context,
+        @Named("yahoo") okHttpClient: OkHttpClient,
+    ): YahooFinanceMostActive {
+        val retrofit = Retrofit.Builder()
+            .client(okHttpClient)
+            .baseUrl(context.getString(R.string.yahoo_finance_endpoint))
+            .addConverterFactory(JsoupConverterFactory())
+            .build()
+        return retrofit.create(YahooFinanceMostActive::class.java)
+    }
 
     @Provides @Singleton
     internal fun provideGoogleNewsApi(
@@ -100,12 +194,24 @@ class NetworkModule {
         return retrofit.create(GoogleNewsApi::class.java)
     }
 
-    // Yahoo news provider removed.
+    @Provides @Singleton
+    internal fun provideYahooFinanceNewsApi(
+        @ApplicationContext context: Context,
+        @Named("yahoo") okHttpClient: OkHttpClient
+    ): YahooFinanceNewsApi {
+        val retrofit =
+            Retrofit.Builder()
+                .client(okHttpClient)
+                .baseUrl(context.getString(R.string.yahoo_news_endpoint))
+                .addConverterFactory(SimpleXmlConverterFactory.create())
+                .build()
+        return retrofit.create(YahooFinanceNewsApi::class.java)
+    }
 
     @Provides @Singleton
     internal fun provideHistoricalDataApi(
         @ApplicationContext context: Context,
-        okHttpClient: OkHttpClient,
+        @Named("yahoo") okHttpClient: OkHttpClient,
         converterFactory: Converter.Factory
     ): ChartApi {
         val retrofit = Retrofit.Builder()

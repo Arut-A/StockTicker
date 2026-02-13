@@ -20,7 +20,6 @@ import timber.log.Timber
 import java.io.Serializable
 import java.lang.ref.WeakReference
 import java.time.Duration
-import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -30,93 +29,22 @@ import javax.inject.Singleton
 
 @Singleton
 class HistoryProvider @Inject constructor(
-    private val chartApi: ChartApi
+    private val chartApi: ChartApi // kept for Hilt DI, unused
 ) {
 
+    private val moexApi = MoexApi()
     private var cachedData: WeakReference<Pair<String, ChartData>>? = null
-    // per-symbol+range cache with timestamp (ms)
-    private val cache: MutableMap<String, Pair<ChartData, Long>> = mutableMapOf()
 
     suspend fun fetchDataByRange(
         symbol: String,
         range: Range
     ): FetchResult<ChartData> = withContext(Dispatchers.IO) {
-        // Check per-symbol+range cache (24 hours)
-        try {
-            val key = "$symbol:${range.duration.toDays()}"
-            val cached = cache[key]
-            val now = System.currentTimeMillis()
-            val oneDayMs = 24 * 60 * 60 * 1000L
-            if (cached != null && now - cached.second < oneDayMs) {
-                return@withContext FetchResult.success(cached.first)
-            }
-        } catch (e: Exception) {
-            // ignore cache errors and continue to fetch
-        }
-        // For MOEX tickers, use MOEX ISS candle API
-        if (MoexApi.isMoexTicker(symbol)) {
-            return@withContext fetchMoexChartData(symbol, range)
-        }
-
-        val chartData = try {
-            val historicalData =
-                chartApi.fetchChartData(
-                    symbol = symbol,
-                    interval = range.intervalParam(),
-                    range = range.rangeParam()
-                )
-            with(historicalData.chart.result.first()) {
-                val chartPreviousClose = meta.chartPreviousClose.toFloat()
-                val regularMarketPrice = meta.regularMarketPrice.toFloat()
-                val dataPoints = timestamp?.mapIndexed { i, stamp ->
-                    val dataQuote = indicators?.quote?.firstOrNull()
-                    if (dataQuote == null ||
-                        dataQuote.low == null || dataQuote.high == null ||
-                        dataQuote.open == null || dataQuote.close == null ||
-                        dataQuote.high[i] === null || dataQuote.low[i] === null ||
-                        dataQuote.open[i] === null || dataQuote.close[i] === null
-                    ) {
-                        null
-                    } else {
-                        DataPoint(
-                            stamp.toFloat(),
-                            dataQuote.high[i]!!.toFloat(),
-                            dataQuote.low[i]!!.toFloat(),
-                            dataQuote.open[i]!!.toFloat(),
-                            dataQuote.close[i]!!.toFloat()
-                        )
-                    }
-                }?.filterNotNull()?.sorted().orEmpty()
-                ChartData(
-                    chartPreviousClose = chartPreviousClose,
-                    regularMarketPrice = regularMarketPrice,
-                    dataPoints = dataPoints
-                )
-            }
-        } catch (ex: Exception) {
-            Timber.w(ex)
-            return@withContext FetchResult.failure(
-                FetchException("Error fetching datapoints", ex)
-            )
-        }
-        try {
-            val key = "$symbol:${range.duration.toDays()}"
-            cache[key] = Pair(chartData, System.currentTimeMillis())
-        } catch (_: Exception) {
-        }
-        return@withContext FetchResult.success(chartData)
-    }
-
-    private val moexApi = MoexApi()
-
-    private suspend fun fetchMoexChartData(
-        symbol: String,
-        range: Range
-    ): FetchResult<ChartData> {
         try {
             val fromDate = LocalDate.now().minusDays(range.duration.toDays())
             val from = fromDate.format(DateTimeFormatter.ISO_LOCAL_DATE)
             val interval = range.moexInterval()
+
+            Timber.d("MOEX chart: $symbol from=$from interval=$interval")
 
             val candles = moexApi.fetchCandles(
                 ticker = symbol,
@@ -125,88 +53,62 @@ class HistoryProvider @Inject constructor(
             )
 
             if (candles.isEmpty()) {
-                return FetchResult.failure(FetchException("No candle data from MOEX for $symbol"))
+                Timber.w("MOEX: no candles for $symbol")
+                return@withContext FetchResult.failure(
+                    FetchException("No chart data for $symbol")
+                )
             }
 
             val moscowZone = ZoneId.of("Europe/Moscow")
-            val moexDateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
-            val dataPoints = candles.mapNotNull { candle ->
+            val dataPoints = candles.mapNotNull { c ->
                 try {
-                    val dateTime = LocalDateTime.parse(candle.begin, moexDateFormat)
-                    val epochSecond = dateTime.atZone(moscowZone).toEpochSecond()
+                    val dt = LocalDateTime.parse(c.begin, fmt)
+                    val epoch = dt.atZone(moscowZone).toEpochSecond()
                     DataPoint(
-                        epochSecond.toFloat(),
-                        candle.high.toFloat(),
-                        candle.low.toFloat(),
-                        candle.open.toFloat(),
-                        candle.close.toFloat()
+                        epoch.toFloat(),
+                        c.high.toFloat(),
+                        c.low.toFloat(),
+                        c.open.toFloat(),
+                        c.close.toFloat()
                     )
-                } catch (e: Exception) {
-                    null
-                }
+                } catch (e: Exception) { null }
             }.sorted()
 
             if (dataPoints.isEmpty()) {
-                return FetchResult.failure(FetchException("Failed to parse MOEX candle data"))
+                return@withContext FetchResult.failure(
+                    FetchException("Failed to parse chart data")
+                )
             }
 
-            val chartPreviousClose = dataPoints.first().openVal
-            val regularMarketPrice = dataPoints.last().closeVal
-
-            val cd = ChartData(
-                chartPreviousClose = chartPreviousClose,
-                regularMarketPrice = regularMarketPrice,
+            val chartData = ChartData(
+                chartPreviousClose = dataPoints.first().openVal,
+                regularMarketPrice = dataPoints.last().closeVal,
                 dataPoints = dataPoints
             )
-            try {
-                val key = "$symbol:${range.duration.toDays()}"
-                cache[key] = Pair(cd, System.currentTimeMillis())
-            } catch (_: Exception) {
-            }
-            return FetchResult.success(cd)
+            Timber.d("MOEX chart OK: ${dataPoints.size} points")
+            return@withContext FetchResult.success(chartData)
         } catch (ex: Exception) {
-            Timber.w(ex)
-            return FetchResult.failure(FetchException("Error fetching MOEX chart data", ex))
-        }
-    }
-
-    private fun Range.intervalParam(): String {
-        return when (this) {
-            ONE_DAY -> "1h"
-            TWO_WEEKS -> "1h"
-            else -> "1d"
-        }
-    }
-
-    private fun Range.rangeParam(): String {
-        return when (this) {
-            ONE_DAY -> "1d"
-            TWO_WEEKS -> "14d"
-            ONE_MONTH -> "1mo"
-            THREE_MONTH -> "3mo"
-            ONE_YEAR -> "1y"
-            FIVE_YEARS -> "5y"
-            MAX -> "max"
-            else -> "max"
+            Timber.e(ex, "MOEX chart error: $symbol")
+            return@withContext FetchResult.failure(
+                FetchException("Chart fetch failed", ex)
+            )
         }
     }
 
     /**
-     * Maps Range to MOEX ISS candle interval values.
-     * 1=1min, 10=10min, 60=1hour, 24=1day, 7=1week, 31=1month
+     * MOEX candle intervals: 1=1min, 10=10min, 60=1hr, 24=1day, 7=1week, 31=1month
      */
-    private fun Range.moexInterval(): Int {
-        return when (this) {
-            ONE_DAY -> 10       // 10-minute candles for intraday
-            TWO_WEEKS -> 60     // hourly candles
-            ONE_MONTH -> 24     // daily candles
-            THREE_MONTH -> 24   // daily candles
-            ONE_YEAR -> 7       // weekly candles
-            FIVE_YEARS -> 31    // monthly candles
-            MAX -> 31           // monthly candles
-            else -> 24
-        }
+    private fun Range.moexInterval(): Int = when (this) {
+        ONE_DAY -> 10
+        TWO_WEEKS -> 60
+        ONE_MONTH -> 24
+        THREE_MONTH -> 24
+        ONE_YEAR -> 7
+        FIVE_YEARS -> 31
+        MAX -> 31
+        else -> 24
     }
 
     data class ChartData(
@@ -233,9 +135,7 @@ class HistoryProvider @Inject constructor(
 
         fun changeStringWithSign(): String {
             val changeString = AppPreferences.SELECTED_DECIMAL_FORMAT.format(change)
-            if (change >= 0) {
-                return "+$changeString"
-            }
+            if (change >= 0) return "+$changeString"
             return changeString
         }
 
@@ -244,9 +144,7 @@ class HistoryProvider @Inject constructor(
 
         fun changePercentStringWithSign(): String {
             val changeString = "${AppPreferences.DECIMAL_FORMAT_2DP.format(changeInPercent)}%"
-            if (changeInPercent >= 0) {
-                return "+$changeString"
-            }
+            if (changeInPercent >= 0) return "+$changeString"
             return changeString
         }
     }

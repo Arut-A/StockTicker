@@ -17,9 +17,6 @@ import com.github.premnirmal.ticker.repo.StocksStorage
 import com.github.premnirmal.ticker.widget.WidgetDataProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -83,12 +80,9 @@ class StocksProvider constructor(
         val nextFetch = preferences.getLong(NEXT_FETCH, 0L)
         _nextFetch.value = nextFetch
         runBlocking { fetchLocal() }
-        if (lastFetched == 0L) {
-            coroutineScope.launch {
-                fetch()
-            }
-        } else {
-            _fetchState.value = FetchState.Success(lastFetched)
+        // Always fetch fresh data on startup
+        coroutineScope.launch {
+            fetch()
         }
         this.tickerSet.addAll(tickers)
         if (this.tickerSet.isEmpty()) {
@@ -351,40 +345,6 @@ class StocksProvider constructor(
     }
 
     fun getStock(ticker: String): Quote? = quoteMap[ticker]
-
-    // --- Fast polling for a single ticker (MOEX) ---
-    // Call `startFastPollingTicker` to begin high-frequency updates for a single symbol.
-    // This runs in the provider's `coroutineScope` and updates storage, portfolio and widgets.
-    private var fastPollJob: Job? = null
-
-    fun startFastPollingTicker(ticker: String, intervalMs: Long = 5000L) {
-        stopFastPollingTicker()
-        fastPollJob = coroutineScope.launch(Dispatchers.Default) {
-            while (isActive) {
-                try {
-                    val result = fetchStockInternal(ticker, false)
-                    if (result.wasSuccessful) {
-                        val data = result.data
-                        synchronized(quoteMap) {
-                            if (!tickerSet.contains(data.symbol)) tickerSet.add(data.symbol)
-                            quoteMap[data.symbol] = data
-                        }
-                        storage.saveQuote(data)
-                        _portfolio.emit(quoteMap.values.filter { tickerSet.contains(it.symbol) }.toList())
-                        widgetDataProvider.refreshWidgetDataList()
-                    }
-                } catch (ex: Exception) {
-                    Timber.w(ex)
-                }
-                delay(intervalMs)
-            }
-        }
-    }
-
-    fun stopFastPollingTicker() {
-        fastPollJob?.cancel()
-        fastPollJob = null
-    }
 
     fun addPortfolio(portfolio: List<Quote>) {
         synchronized(quoteMap) {

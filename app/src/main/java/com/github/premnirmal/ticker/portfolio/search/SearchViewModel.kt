@@ -78,9 +78,23 @@ class SearchViewModel @Inject constructor(
         searchJob?.cancel()
         searchJob = viewModelScope.launch(Dispatchers.Default) {
             delay(500L)
-            // Suggestions from remote removed. Provide the typed query as a single local suggestion.
-            val suggestion = Suggestion(query.uppercase())
-            _searchResult.emit(FetchResult.success(listOf(suggestion)))
+            val suggestions = stocksApi.getSuggestions(query)
+            if (suggestions.wasSuccessful) {
+                val suggestionList = suggestions.data.toMutableList()
+                val querySuggestion = SuggestionNet(query.uppercase())
+                if (!suggestionList.contains(querySuggestion)) {
+                    suggestionList.add(querySuggestion)
+                }
+                val data = suggestionList.map {
+                    ensureActive()
+                    Suggestion.fromSuggestionNet(it)
+                }
+                _searchResult.emit(FetchResult.success(data))
+            } else {
+                Timber.w(suggestions.error)
+                _searchResult.emit(FetchResult.failure(suggestions.error))
+                appMessaging.sendSnackbar(R.string.error_fetching_suggestions)
+            }
         }
     }
 

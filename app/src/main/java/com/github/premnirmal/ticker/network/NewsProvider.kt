@@ -16,28 +16,19 @@ import javax.inject.Singleton
 class NewsProvider @Inject constructor(
     private val coroutineScope: CoroutineScope,
     private val googleNewsApi: GoogleNewsApi,
+    private val yahooNewsApi: YahooFinanceNewsApi,
     private val apeWisdom: ApeWisdom,
-    private val stocksApi: StocksApi,
-    private val appPreferences: com.github.premnirmal.ticker.AppPreferences
+    private val yahooFinanceMostActive: YahooFinanceMostActive,
+    private val stocksApi: StocksApi
 ) {
 
     private var cachedBusinessArticles: List<NewsArticle> = emptyList()
     private var cachedTrendingStocks: List<Quote> = emptyList()
 
-    fun initCache(force: Boolean = false) {
+    fun initCache() {
         coroutineScope.launch {
-            try {
-                val last = appPreferences.getLastNewsFetchMs()
-                val now = System.currentTimeMillis()
-                val oneDayMs = 24 * 60 * 60 * 1000L
-                if (force || now - last >= oneDayMs) {
-                    fetchMarketNews()
-                    fetchTrendingStocks()
-                    appPreferences.setLastNewsFetchMs(now)
-                }
-            } catch (e: Exception) {
-                Timber.w(e)
-            }
+            fetchMarketNews()
+            fetchTrendingStocks()
         }
     }
 
@@ -58,19 +49,17 @@ class NewsProvider @Inject constructor(
     suspend fun fetchMarketNews(useCache: Boolean = false): FetchResult<List<NewsArticle>> =
         withContext(Dispatchers.IO) {
             try {
-                val now = System.currentTimeMillis()
-                val last = appPreferences.getLastNewsFetchMs()
-                val oneDayMs = 24 * 60 * 60 * 1000L
-                if (useCache && cachedBusinessArticles.isNotEmpty() && now - last < oneDayMs) {
+                if (useCache && cachedBusinessArticles.isNotEmpty()) {
                     return@withContext FetchResult.success(cachedBusinessArticles)
                 }
+                val marketNewsArticles = yahooNewsApi.getNewsFeed().articleList.orEmpty()
                 val businessNewsArticles = googleNewsApi.getBusinessNews().articleList.orEmpty()
                 val articles: Set<NewsArticle> = HashSet<NewsArticle>().apply {
+                    addAll(marketNewsArticles)
                     addAll(businessNewsArticles)
                 }
                 val newsArticleList = articles.toList().sorted()
                 cachedBusinessArticles = newsArticleList
-                appPreferences.setLastNewsFetchMs(System.currentTimeMillis())
                 return@withContext FetchResult.success(newsArticleList)
             } catch (ex: Exception) {
                 Timber.w(ex)
@@ -83,21 +72,42 @@ class NewsProvider @Inject constructor(
     suspend fun fetchTrendingStocks(useCache: Boolean = false): FetchResult<List<Quote>> =
         withContext(Dispatchers.IO) {
             try {
-                val now = System.currentTimeMillis()
-                val last = appPreferences.getLastNewsFetchMs()
-                val oneDayMs = 24 * 60 * 60 * 1000L
-                if (useCache && cachedTrendingStocks.isNotEmpty() && now - last < oneDayMs) {
+                if (useCache && cachedTrendingStocks.isNotEmpty()) {
                     return@withContext FetchResult.success(cachedTrendingStocks)
                 }
 
                 // adding this extra try/catch because html format can change and parsing will fail
-                // Use apewisdom as primary source for trending stocks
+                try {
+                    val mostActiveHtml = yahooFinanceMostActive.getMostActive()
+                    if (mostActiveHtml.isSuccessful) {
+                        val doc = mostActiveHtml.body()!!
+                        val elements = doc.select("fin-streamer")
+                        val symbols = ArrayList<String>()
+                        for (element in elements) {
+                            if (element.hasAttr("data-symbol") && element.attr("class").equals("fw(600)", ignoreCase = true)) {
+                                val symbol = element.attr("data-symbol")
+                                if (!symbols.contains(symbol)) symbols.add(symbol)
+                            }
+                        }
+                        if (symbols.isNotEmpty()) {
+                            Timber.d("symbols: ${symbols.joinToString(",")}")
+                            val mostActiveStocks = stocksApi.getStocks(symbols.toList())
+                            if (mostActiveStocks.wasSuccessful) {
+                                cachedTrendingStocks = mostActiveStocks.data
+                            }
+                            return@withContext mostActiveStocks
+                        }
+                    }
+                } catch (e: Exception) {
+                    Timber.w(e)
+                }
+
+                // fallback to apewisdom api
                 val result = apeWisdom.getTrendingStocks().results
                 val data = result.map { it.ticker }
                 val trendingResult = stocksApi.getStocks(data)
                 if (trendingResult.wasSuccessful) {
                     cachedTrendingStocks = trendingResult.data
-                    appPreferences.setLastNewsFetchMs(System.currentTimeMillis())
                 }
                 return@withContext trendingResult
             } catch (ex: Exception) {
